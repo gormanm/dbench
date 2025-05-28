@@ -321,6 +321,8 @@ static void fio_writex(struct dbench_op *op)
 	int offset = op->params[1];
 	int size = op->params[2];
 	int ret_size = op->params[3];
+	int written = 0;
+	int zero_written = 0;
 	int i = find_handle(op->child, handle);
 	void *buf;
 	struct stat st;
@@ -353,16 +355,29 @@ static void fio_writex(struct dbench_op *op)
 		} 
 	}
 
-	ret = pwrite(ftable[i].fd, buf, size, offset);
-	if (ret == -1) {
-		printf("[%d] write failed on handle %d (%s)\n", 
-		       op->child->line, handle, strerror(errno));
-		exit(1);
-	}
-	if (ret != ret_size) {
-		printf("[%d] wrote %d bytes, expected to write %d bytes on handle %d\n", 
-		       op->child->line, (int)ret, (int)ret_size, handle);
-		exit(1);
+	while (written != ret_size) {
+		ret = pwrite(ftable[i].fd, buf + written, size - written, offset + written);
+		if (ret == -1) {
+			printf("[%d] write failed on handle %d (%s)\n",
+			       op->child->line, handle, strerror(errno));
+			exit(1);
+		}
+
+		if (ret > 0) {
+			zero_written = 0;
+		} else {
+			if (++zero_written == 10) {
+				printf("[%d] failing to make forward progress after %d bytes, expected to write %d bytes on handle %d\n",
+				       op->child->line, (int)written, (int)ret_size, handle);
+				exit(1);
+			}
+		}
+
+		written += ret;
+		if (written != ret_size) {
+			printf("[%d] wrote %d bytes, expected to write %d bytes on handle %d\n",
+			       op->child->line, (int)ret, (int)ret_size - written, handle);
+		}
 	}
 
 	if (options.do_fsync) fsync(ftable[i].fd);
