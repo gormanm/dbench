@@ -103,9 +103,22 @@ static void sig_alarm(int sig)
 	struct timeval tnow;
 	int num_active = 0;
 	int num_finished = 0;
+	static struct timeval tv_last_report;
+	static double last_report_bytes = 0;
+	static int report_initialized = 0;
+	double delta_t;
+	double delta_bytes;
+	double interval_throughput;
+	double overall_throughput;
 	(void)sig;
 
 	tnow = timeval_current();
+
+	if (!report_initialized) {
+		tv_last_report = tv_start;
+		last_report_bytes = 0;
+		report_initialized = 1;
+	}
 
 	for (i=0;i<nclients;i++) {
 		total_bytes += children[i].bytes - children[i].bytes_done_warmup;
@@ -130,6 +143,8 @@ static void sig_alarm(int sig)
 			children[i].worst_latency = 0;
 			memset(&children[i].ops, 0, sizeof(children[i].ops));
 		}
+		tv_last_report = tnow;
+		last_report_bytes = 0;
 		goto next;
 	}
 	if (t < options.warmup) {
@@ -145,6 +160,14 @@ static void sig_alarm(int sig)
 		goto next;
 	}
 
+	delta_t = timeval_elapsed2(&tv_last_report, &tnow);
+	delta_bytes = total_bytes - last_report_bytes;
+	interval_throughput = (delta_t > 0 && delta_bytes > 0) ? (1.0e-6 * delta_bytes / delta_t) : 0.0;
+	overall_throughput = (t > 0) ? (1.0e-6 * total_bytes / t) : 0.0;
+
+	tv_last_report = tnow;
+	last_report_bytes = total_bytes;
+
 	latency = 0;
 	if (!in_cleanup) {
 		for (i=0;i<nclients;i++) {
@@ -159,33 +182,33 @@ static void sig_alarm(int sig)
 
         if (in_warmup) {
 		if (options.machine_readable) {
-                    printf("@W@%d@%d@%.2f@%u@%.03f@\n", 
+                    printf("@W@%d@%d@%.2f@%.2f@%u@%.03f@\n", 
                        num_active, total_lines/nclients, 
-			   1.0e-6 * total_bytes / t, (int)t, latency*1000);
+			   interval_throughput, overall_throughput, (int)t, latency*1000);
 		} else {
-                    printf("%4d  %8d  %7.2f MB/sec  warmup %3.0f sec  latency %.03f ms\n", 
+                    printf("%4d  %8d  interval %7.2f MB/sec  overall %7.2f MB/sec  warmup %3.0f sec  latency %.03f ms\n", 
                        num_active, total_lines/nclients, 
-			   1.0e-6 * total_bytes / t, t, latency*1000);
+			   interval_throughput, overall_throughput, t, latency*1000);
 		}
         } else if (in_cleanup) {
 		if (options.machine_readable) {
-                    printf("@C@%d@%d@%.2f@%u@%.03f@\n", 
+                    printf("@C@%d@%d@%.2f@%.2f@%u@%.03f@\n", 
                        num_active, total_lines/nclients, 
-			   1.0e-6 * total_bytes / t, (int)t, latency*1000);
+			   interval_throughput, overall_throughput, (int)t, latency*1000);
 		} else {
                     printf("%4d  cleanup %3.0f sec\n", nclients - num_finished, t);
 		}
         } else {
 		if (options.machine_readable) {
-                    printf("@R@%d@%d@%.2f@%u@%.03f@\n", 
+                    printf("@R@%d@%d@%.2f@%.2f@%u@%.03f@\n", 
                        num_active, total_lines/nclients, 
-			   1.0e-6 * total_bytes / t, (int)t, latency*1000);
+			   interval_throughput, overall_throughput, (int)t, latency*1000);
 		} else {
-                    printf("%4d  %8d  %7.2f MB/sec  execute %3.0f sec  latency %.03f ms\n", 
+                    printf("%4d  %8d  interval %7.2f MB/sec  overall %7.2f MB/sec  execute %3.0f sec  latency %.03f ms\n", 
                        nclients, total_lines/nclients, 
-                       1.0e-6 * total_bytes / t, t, latency*1000);
-	  	       throughput = 1.0e-6 * total_bytes / t;
+                       interval_throughput, overall_throughput, t, latency*1000);
 		}
+		throughput = overall_throughput;
         }
 
 	fflush(stdout);
@@ -495,7 +518,6 @@ static void process_opts(int argc, const char **argv)
 
  int main(int argc, const char *argv[])
 {
-	double total_bytes = 0;
 	double latency=0;
 	int i;
 
@@ -564,7 +586,6 @@ static void process_opts(int argc, const char **argv)
 	create_procs(options.nprocs, child_run);
 
 	for (i=0;i<options.nprocs*options.clients_per_process;i++) {
-		total_bytes += children[i].bytes - children[i].bytes_done_warmup;
 		latency = MAX(latency, children[i].worst_latency);
 	}
 
